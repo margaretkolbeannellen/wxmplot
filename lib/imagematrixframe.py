@@ -127,7 +127,7 @@ class ImageMatrixFrame(BaseFrame):
 
         cust = self.CustomConfig(conf_panel)
         if cust is not None:
-            sizer.Add(cust, 0, lsty, 1)
+            csizer.Add(cust, 0, lsty, 1)
         pack(conf_panel, csizer)
 
         for name, panel in (('corplot', self.plot_panel),
