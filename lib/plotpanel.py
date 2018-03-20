@@ -11,7 +11,7 @@ if is_wxPhoenix:
 else:
     wxCursor = wx.StockCursor
 
-from numpy import nonzero, where, ma, nan
+from numpy import nonzero, where, ma, nan, array
 import matplotlib
 from datetime import datetime
 from matplotlib import dates
@@ -131,13 +131,13 @@ class PlotPanel(BasePanel):
         self.conf.user_limits[axes] = [None, None, None, None]
 
         if xlabel is not None:
-            self.set_xlabel(xlabel)
+            self.set_xlabel(xlabel, delay_draw=True)
         if ylabel is not None:
-            self.set_ylabel(ylabel)
+            self.set_ylabel(ylabel, delay_draw=True)
         if y2label is not None:
-            self.set_y2label(y2label)
-        if title  is not None:
-            self.set_title(title)
+            self.set_y2label(y2label, delay_draw=True)
+        if title is not None:
+            self.set_title(title, delay_draw=True)
         if use_dates is not None:
             self.use_dates  = use_dates
         return self.oplot(xdata, ydata, side=side, **kws)
@@ -157,7 +157,6 @@ class PlotPanel(BasePanel):
         self.cursor_mode = 'zoom'
         conf = self.conf
         conf.plot_type = 'lineplot'
-
         axes = self.axes
         if side == 'right':
             axes = self.get_right_axes()
@@ -181,13 +180,13 @@ class PlotPanel(BasePanel):
             conf.viewpad = viewpad
 
         if xlabel is not None:
-            self.set_xlabel(xlabel)
+            self.set_xlabel(xlabel, delay_draw=delay_draw)
         if ylabel is not None:
-            self.set_ylabel(ylabel)
+            self.set_ylabel(ylabel, delay_draw=delay_draw)
         if y2label is not None:
-            self.set_y2label(y2label)
+            self.set_y2label(y2label, delay_draw=delay_draw)
         if title  is not None:
-            self.set_title(title)
+            self.set_title(title, delay_draw=delay_draw)
         if show_legend is not None:
             conf.set_legend_location(legend_loc, legend_on)
             conf.show_legend = show_legend
@@ -279,7 +278,6 @@ class PlotPanel(BasePanel):
         if legendfontsize is not None:
             conf.legendfont.set_size(legendfontsize)
             needs_relabel = True
-
 
         if n < len(conf.lines):
             conf.lines[n] = _lines
@@ -421,17 +419,10 @@ class PlotPanel(BasePanel):
         self.conf.set_trace_datarange((min(xdata), max(xdata),
                                        min(ydata), max(ydata)))
 
-        fcols = [to_rgba(self.conf.scatter_normalcolor) for x in xdata]
-        ecols = [self.conf.scatter_normaledge]*len(xdata)
-
-        self.conf.scatter_data = [(x, y) for x, y in zip(xdata, ydata)]
-        self.conf.scatter_size = size
-        self.conf.scatter_coll = CircleCollection(
-            sizes=(size, ), facecolors=fcols, edgecolors=ecols,
-            offsets=self.conf.scatter_data,
-            transOffset= self.axes.transData)
-        self.axes.add_collection(self.conf.scatter_coll)
-
+        self.conf.scatter_xdata = xdata
+        self.conf.scatter_ydata = ydata
+        self.axes.scatter(xdata, ydata, c=self.conf.scatter_normalcolor,
+                          edgecolors=self.conf.scatter_normaledge)
 
         if self.conf.show_grid:
             for i in axes.get_xgridlines()+axes.get_ygridlines():
@@ -455,29 +446,32 @@ class PlotPanel(BasePanel):
 
     def lassoHandler(self, vertices):
         conf = self.conf
-
         if self.conf.plot_type == 'scatter':
-            fcols = conf.scatter_coll.get_facecolors()
-            ecols = conf.scatter_coll.get_edgecolors()
-            sdat = conf.scatter_data
-            mask = inside_poly(vertices,sdat)
+            xd, yd = conf.scatter_xdata, conf.scatter_ydata
+            sdat = list(zip(xd, yd))
+            oldmask = conf.scatter_mask
+            try:
+                self.axes.scatter(xd[where(oldmask)], yd[where(oldmask)],
+                                  s=conf.scatter_size,
+                                  c=conf.scatter_normalcolor,
+                                  edgecolors=conf.scatter_normaledge)
+            except IndexError:
+                self.axes.scatter(xd, yd, s=conf.scatter_size,
+                                  c=conf.scatter_normalcolor,
+                                  edgecolors=conf.scatter_normaledge)
+
+            mask = conf.scatter_mask = inside_poly(vertices, sdat)
             pts = nonzero(mask)[0]
-            self.conf.scatter_mask = mask
-            for i in range(len(sdat)):
-                if i in pts:
-                    ecols[i] = to_rgba(conf.scatter_selectedge)
-                    fcols[i] = to_rgba(conf.scatter_selectcolor)
-                    fcols[i][3] = 0.3
-                    ecols[i][3] = 0.8
-                else:
-                    fcols[i] = to_rgba(conf.scatter_normalcolor)
-                    ecols[i] = to_rgba(conf.scatter_normaledge)
+            self.axes.scatter(xd[where(mask)], yd[where(mask)],
+                              s=conf.scatter_size,
+                              c=conf.scatter_selectcolor,
+                              edgecolors=conf.scatter_selectedge)
+
         else:
             xdata = self.axes.lines[0].get_xdata()
             ydata = self.axes.lines[0].get_ydata()
             sdat = [(x, y) for x, y in zip(xdata, ydata)]
             mask = inside_poly(vertices,sdat)
-            # print mask
             pts = nonzero(mask)[0]
 
         self.lasso = None
@@ -486,7 +480,7 @@ class PlotPanel(BasePanel):
         if (self.lasso_callback is not None and
             hasattr(self.lasso_callback , '__call__')):
             self.lasso_callback(data = sdat,
-                                selected = pts, mask=mask)
+                                selected=pts, mask=mask)
 
     def set_xylims(self, limits, axes=None, side='left'):
         "set user-defined limits and apply them"
@@ -654,14 +648,13 @@ class PlotPanel(BasePanel):
             try:
                 (ox0, oy0), (ox1, oy1) = ax.get_tightbbox(self.canvas.get_renderer()).get_points()
                 (ox0, oy0), (ox1, oy1) = trans(((ox0 ,oy0),(ox1 ,oy1)))
-                dl = max(dl, (x0 - ox0))
-                dt = max(dt, (oy1 - y1))
-                dr = max(dr, (ox1 - x1))
-                db = max(db, (y0 - oy0))
+                dl = min(0.2, max(dl, (x0 - ox0)))
+                dt = min(0.2, max(dt, (oy1 - y1)))
+                dr = min(0.2, max(dr, (ox1 - x1)))
+                db = min(0.2, max(db, (y0 - oy0)))
             except:
                 pass
 
-        # print(" > %.3f %.3f %.3f %.3f " % (dl, dt, dr, db))
         return (l + dl, t + dt, r + dr, b + db)
 
     def autoset_margins(self):
@@ -679,7 +672,6 @@ class PlotPanel(BasePanel):
         if not self.use_dates:
             self.conf.margins = l, t, r, b = self.get_default_margins()
             self.gridspec.update(left=l, top=1-t, right=1-r, bottom=b)
-
         # Axes positions update
         for ax in self.fig.get_axes():
             try:
